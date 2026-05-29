@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "X Radar 自動日本語翻訳",
+  "version": "0.1.0",
+  "description": "X Radar の日本語以外の投稿を、Chrome 組み込み翻訳 API で自動的に日本語へその場置換します。",
+  "content_scripts": [
+    {
+      "matches": ["https://x.com/*", "https://twitter.com/*"],
+      "js": ["src/translator.js", "src/ui.js", "src/content.js"],
+      "css": ["styles/content.css"],
+      "run_at": "document_idle",
+      "world": "MAIN"
+    }
+  ]
+}
