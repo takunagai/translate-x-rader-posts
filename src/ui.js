@@ -1,6 +1,7 @@
 // ui.js — 有効化ボタン・翻訳済みマーカー
-// 未DL言語が見つかったときフローティングボタンを表示し、クリック（=ユーザージェスチャー）で
-// モデルDLをトリガーする。翻訳済み要素にはマーカーと原文ツールチップを付ける。
+// 未DLの言語判定/翻訳モデルがあるときフローティングボタンを表示し、
+// クリック（=ユーザージェスチャー）でモデルDLをトリガーする。
+// 翻訳済み要素にはマーカーと原文ツールチップを付ける。
 (() => {
   "use strict";
 
@@ -8,14 +9,12 @@
 
   let button = null;
   const pendingLangs = new Set();
+  let needsDetector = false; // 言語判定モデルが未DLか
+  let isDownloading = false; // DL進捗表示中はラベルを上書きしない
   let activateHandler = null; // content.js が登録する有効化処理
 
   function setActivateHandler(handler) {
     activateHandler = handler;
-  }
-
-  function pendingLabel() {
-    return Array.from(pendingLangs).join(", ");
   }
 
   function ensureButton() {
@@ -26,6 +25,7 @@
     button.addEventListener("click", async () => {
       if (!activateHandler) return;
       const targets = Array.from(pendingLangs);
+      isDownloading = true;
       button.disabled = true;
       try {
         await activateHandler(targets, (src, loaded) => {
@@ -35,6 +35,7 @@
       } catch (error) {
         console.warn("[xr] 有効化に失敗", { error: String(error) });
       } finally {
+        isDownloading = false;
         button.disabled = false;
         refreshButton();
       }
@@ -45,11 +46,15 @@
 
   function refreshButton() {
     if (!button) return;
-    if (pendingLangs.size === 0) {
+    if (isDownloading) return; // DL中は進捗テキストを保持（addPendingLang 等で上書きしない）
+    const labels = [];
+    if (needsDetector) labels.push("言語判定");
+    labels.push(...pendingLangs);
+    if (labels.length === 0) {
       button.style.display = "none";
       return;
     }
-    button.textContent = `翻訳を有効化 (${pendingLabel()})`;
+    button.textContent = `翻訳を有効化 (${labels.join(", ")})`;
     button.style.display = "block";
   }
 
@@ -57,6 +62,12 @@
     if (pendingLangs.has(src)) return;
     pendingLangs.add(src);
     ensureButton();
+    refreshButton();
+  }
+
+  function setNeedsDetector(value) {
+    needsDetector = !!value;
+    if (needsDetector) ensureButton();
     refreshButton();
   }
 
@@ -74,6 +85,7 @@
   Object.assign(ns, {
     setActivateHandler,
     addPendingLang,
+    setNeedsDetector,
     clearPending,
     markTranslated,
   });

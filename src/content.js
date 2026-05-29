@@ -6,24 +6,37 @@
 
   const ns = window.__xrT;
   if (!ns) return;
+  // 二重注入（拡張リロード等）時に history 多重ラップ・タイマー重複を防ぐ
+  if (ns.__contentLoaded) return;
+  ns.__contentLoaded = true;
 
   // 投稿本文のセレクタ（実機検証で確定。本文はプレーンテキストで子要素なし）
   const BODY_SELECTOR = "div.whitespace-pre-wrap.break-words.text-body";
   const RADAR_PATTERN = /\/i\/radar\//;
   const SCAN_DEBOUNCE_MS = 300;
   const URL_POLL_MS = 500;
+  const MAX_TRANSLATE_RETRIES = 3; // 恒久失敗の無限リトライを防ぐ
+  const MAX_CONCURRENT = 4; // 一括挿入時の翻訳輻輳を防ぐ同時実行上限
 
   let observer = null;
   let isRunning = false;
   let scanTimer = null;
+  let detectorReady = true; // 言語判定モデルが使えるか（未DLなら有効化まで false）
+
+  // 同時実行を絞るための簡易キュー
+  let activeCount = 0;
+  const queue = [];
+  const queued = new WeakSet();
 
   function isOnRadar() {
     return RADAR_PATTERN.test(location.pathname);
   }
 
   async function processBody(element) {
-    // data-xr-state が付いていれば処理済み（translated/ja/skip/pending/working）
+    // data-xr-state が付いていれば処理済み（translated/ja/skip/pending/working/error）
     if (element.dataset.xrState) return;
+    // await より前に同期的に状態を確保し、検出待ち中の再入（二重処理）を防ぐ
+    element.dataset.xrState = "working";
 
     const text = (element.textContent || "").trim();
     // 短すぎ/判定不能は detectLang が null を返す（最低文字数の閾値もそちらに集約）
@@ -37,35 +50,53 @@
       return;
     }
 
-    // 翻訳中の二重処理を防ぐ
-    element.dataset.xrState = "working";
     try {
       const result = await ns.translate(text, lang);
       if (result.ok) {
-        element.dataset.xrOriginal = text;
         element.textContent = result.text;
-        ns.markTranslated(element, text);
+        ns.markTranslated(element, text); // title=原文 / マーカー付与
         element.dataset.xrState = "translated";
       } else if (result.needsDownload) {
         element.dataset.xrState = "pending";
-        element.dataset.xrLang = lang;
         ns.addPendingLang(lang);
       } else {
         element.dataset.xrState = "skip";
       }
     } catch (error) {
       console.warn("[xr] 翻訳に失敗", { lang, error: String(error) });
-      delete element.dataset.xrState; // 次回スキャンで再試行
+      const retries = Number(element.dataset.xrRetry || "0") + 1;
+      if (retries >= MAX_TRANSLATE_RETRIES) {
+        element.dataset.xrState = "error"; // 終端：以後リトライしない
+      } else {
+        element.dataset.xrRetry = String(retries);
+        delete element.dataset.xrState; // 一時失敗は次回スキャンで再試行
+      }
+    }
+  }
+
+  // 同時実行数を制限して processBody を回す
+  function pump() {
+    while (activeCount < MAX_CONCURRENT && queue.length > 0) {
+      const element = queue.shift();
+      queued.delete(element);
+      activeCount++;
+      processBody(element).finally(() => {
+        activeCount--;
+        pump();
+      });
     }
   }
 
   function scan() {
-    // 未処理（data-xr-state 未設定）の本文だけを対象にする
+    if (!detectorReady) return; // 言語判定モデルが未DLの間は走らせない（誤 skip 防止）
     document
       .querySelectorAll(`${BODY_SELECTOR}:not([data-xr-state])`)
       .forEach((element) => {
-        processBody(element);
+        if (queued.has(element)) return;
+        queued.add(element);
+        queue.push(element);
       });
+    pump();
   }
 
   function scheduleScan() {
@@ -76,18 +107,19 @@
   // 有効化ボタンのクリック内から呼ばれる（ジェスチャーあり）
   async function activate(langs, onProgress) {
     await ns.ensureDownloaded(langs, onProgress);
+    detectorReady = true; // 言語判定モデルも ensureDownloaded で用意済み
     // pending 状態の投稿を未処理に戻して再スキャン
     document
       .querySelectorAll(`${BODY_SELECTOR}[data-xr-state="pending"]`)
       .forEach((element) => {
         delete element.dataset.xrState;
-        delete element.dataset.xrLang;
       });
+    ns.setNeedsDetector(false);
     ns.clearPending();
     scan();
   }
 
-  function start() {
+  async function start() {
     if (isRunning) return;
     if (!ns.hasApis()) {
       console.warn(
@@ -97,9 +129,22 @@
     }
     isRunning = true;
     ns.setActivateHandler(activate);
-    scan();
-    observer = new MutationObserver(scheduleScan);
+    // ノード追加を伴う変化のときだけスキャンする（属性のみ・削除のみは無視）
+    observer = new MutationObserver((records) => {
+      for (const record of records) {
+        if (record.addedNodes && record.addedNodes.length > 0) {
+          scheduleScan();
+          return;
+        }
+      }
+    });
     observer.observe(document.body, { childList: true, subtree: true });
+    // 言語判定モデルが未DLなら、誤判定で全 skip にせず有効化ボタンを出す
+    if (await ns.detectorNeedsDownload()) {
+      detectorReady = false;
+      ns.setNeedsDetector(true);
+    }
+    scan();
   }
 
   function stop() {

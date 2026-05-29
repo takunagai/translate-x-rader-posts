@@ -13,6 +13,8 @@
   const MIN_CONFIDENCE = 0.5;
 
   // 翻訳から保護するトークン: URL / @メンション / #ハッシュタグ
+  // URL は \S+ で貪欲に取り、句読点を含む正規 URL を切らずに丸ごと温存する
+  // （末尾句読点の巻き込みより、正規 URL の途中切断を避ける方を優先）。
   const TOKEN_SOURCE = "https?:\\/\\/\\S+|@\\w+|#[\\p{L}\\p{N}_]+";
   const TOKEN_TEST = new RegExp(TOKEN_SOURCE, "u");
   const TOKEN_SPLIT = new RegExp("(" + TOKEN_SOURCE + ")", "gu");
@@ -21,20 +23,71 @@
   const ns = (window.__xrT = window.__xrT || {});
 
   let detector = null;
-  let detectorPromise = null;
-  const translators = new Map(); // src -> TranslatorInstance
-  const availabilityCache = new Map(); // src -> "available" | "downloadable" | ...
+  let detectorPromise = null; // 自動経路で create 中の Promise（成功で detector に解決）
+  let detectorAvailability = null; // "available" | "downloadable" | ...（エラーはキャッシュしない）
+  const translators = new Map(); // src -> TranslatorInstance（解決済みの実体のみ）
+  const creating = new Map(); // src -> Promise<TranslatorInstance|null>（生成中の重複防止）
+  const availabilityCache = new Map(); // src -> Promise<availability文字列>
 
   function hasApis() {
     return typeof LanguageDetector !== "undefined" && typeof Translator !== "undefined";
   }
 
+  // 言語判定モデルの availability（成功時のみキャッシュ。エラーは再試行可能に残さない）
+  async function getDetectorAvailability() {
+    if (detectorAvailability && detectorAvailability !== "unavailable") {
+      return detectorAvailability;
+    }
+    try {
+      detectorAvailability = await LanguageDetector.availability();
+      return detectorAvailability;
+    } catch (error) {
+      console.warn("[xr] 言語判定の availability 取得に失敗", { error: String(error) });
+      return "unavailable";
+    }
+  }
+
+  function detectorNeedsDownload() {
+    return getDetectorAvailability().then(
+      (availability) => availability === "downloadable" || availability === "downloading"
+    );
+  }
+
+  // 自動経路（ジェスチャー無し）。available なら作れる。未DLだと reject しうるが、
+  // その場合は detectorPromise を残さず再試行可能にする。
   async function getDetector() {
     if (detector) return detector;
     if (!detectorPromise) {
-      detectorPromise = LanguageDetector.create().then((d) => (detector = d));
+      detectorPromise = LanguageDetector.create().then(
+        (instance) => {
+          detector = instance;
+          detectorAvailability = "available";
+          return instance;
+        },
+        (error) => {
+          detectorPromise = null; // 失敗はキャッシュしない（再試行可能に）
+          throw error;
+        }
+      );
     }
     return detectorPromise;
+  }
+
+  // ジェスチャー内から呼ぶ。言語判定モデルを（必要なら）DLして用意する。
+  async function ensureDetector(onProgress) {
+    if (detector) return;
+    try {
+      detector = await LanguageDetector.create({
+        monitor(monitor) {
+          monitor.addEventListener("downloadprogress", (event) => {
+            if (onProgress) onProgress("言語判定", event.loaded);
+          });
+        },
+      });
+      detectorAvailability = "available";
+    } catch (error) {
+      console.warn("[xr] 言語判定モデルのDLに失敗", { error: String(error) });
+    }
   }
 
   // テキストの言語を判定。判定不能/低信頼度は null を返す（= スキップ対象）
@@ -54,20 +107,20 @@
     }
   }
 
-  async function availabilityOf(src) {
+  // 同一 src の並行呼び出しで availability を多重発行しないよう Promise をキャッシュ。
+  // エラー時はキャッシュから外し、一過性の失敗が永続化しないようにする。
+  function availabilityOf(src) {
     if (availabilityCache.has(src)) return availabilityCache.get(src);
-    let availability = "unavailable";
-    try {
-      availability = await Translator.availability({
-        sourceLanguage: src,
-        targetLanguage: TARGET_LANG,
-      });
-    } catch (error) {
+    const promise = Translator.availability({
+      sourceLanguage: src,
+      targetLanguage: TARGET_LANG,
+    }).catch((error) => {
       console.warn("[xr] availability 取得に失敗", { src, error: String(error) });
-      availability = "unavailable";
-    }
-    availabilityCache.set(src, availability);
-    return availability;
+      availabilityCache.delete(src);
+      return "unavailable";
+    });
+    availabilityCache.set(src, promise);
+    return promise;
   }
 
   // 1 セグメント（散文）を、前後の空白を保ったまま翻訳する
@@ -111,27 +164,35 @@
     return outLines.join("\n");
   }
 
-  // available のときだけ翻訳器を生成（downloadable はジェスチャー必須なのでここでは作らない）
-  async function getTranslator(src) {
-    if (translators.has(src)) return translators.get(src);
-    const availability = await availabilityOf(src);
-    if (availability !== "available") return null;
-    const instance = await Translator.create({
-      sourceLanguage: src,
-      targetLanguage: TARGET_LANG,
+  // available のときだけ翻訳器を生成。同一 src の並行生成は creating マップで1本化する
+  // （getDetector と同様にメモ化。translators には解決済みの実体のみ格納）。
+  function getTranslator(src) {
+    if (translators.has(src)) return Promise.resolve(translators.get(src));
+    if (creating.has(src)) return creating.get(src);
+    const promise = (async () => {
+      const availability = await availabilityOf(src);
+      if (availability !== "available") return null;
+      const instance = await Translator.create({
+        sourceLanguage: src,
+        targetLanguage: TARGET_LANG,
+      });
+      translators.set(src, instance);
+      return instance;
+    })().finally(() => {
+      creating.delete(src);
     });
-    translators.set(src, instance);
-    return instance;
+    creating.set(src, promise);
+    return promise;
   }
 
   // 翻訳を試みる。
   // 成功: { ok: true, text }
-  // モデル未DL（要ジェスチャー）: { needsDownload: true, lang: src }
+  // モデル未DL（要ジェスチャー）: { needsDownload: true }
   // 非対応など: { skip: true }
   async function translate(text, src) {
     const instance = await getTranslator(src);
     if (!instance) {
-      const availability = availabilityCache.get(src);
+      const availability = await availabilityOf(src);
       if (availability === "downloadable" || availability === "downloading") {
         return { needsDownload: true };
       }
@@ -141,12 +202,16 @@
     return { ok: true, text: translated };
   }
 
-  // ユーザージェスチャー内から呼ぶ前提。指定言語のモデルをDLして翻訳器を確保する。
+  // ユーザージェスチャー内から呼ぶ前提。指定言語 ＋（未DLなら）言語判定モデルを、
+  // すべてジェスチャー有効中に「同期的に」create 開始する。逐次 await すると最初の
+  // DL 解決で transient activation が失効し、2件目以降の create が失敗するため。
   async function ensureDownloaded(langs, onProgress) {
+    const tasks = [];
+    if (!detector) tasks.push(ensureDetector(onProgress));
     for (const src of langs) {
       if (translators.has(src)) continue;
-      try {
-        const instance = await Translator.create({
+      tasks.push(
+        Translator.create({
           sourceLanguage: src,
           targetLanguage: TARGET_LANG,
           monitor(monitor) {
@@ -154,19 +219,25 @@
               if (onProgress) onProgress(src, event.loaded);
             });
           },
-        });
-        translators.set(src, instance);
-        availabilityCache.set(src, "available");
-      } catch (error) {
-        console.warn("[xr] モデルDLに失敗", { src, error: String(error) });
-      }
+        })
+          .then((instance) => {
+            translators.set(src, instance);
+            availabilityCache.set(src, Promise.resolve("available"));
+          })
+          .catch((error) => {
+            console.warn("[xr] モデルDLに失敗", { src, error: String(error) });
+            availabilityCache.delete(src); // 失敗は再評価可能に（stale な downloadable を残さない）
+          })
+      );
     }
+    await Promise.all(tasks);
   }
 
   Object.assign(ns, {
     TARGET_LANG,
     hasApis,
     detectLang,
+    detectorNeedsDownload,
     translate,
     ensureDownloaded,
   });
