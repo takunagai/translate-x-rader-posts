@@ -8,6 +8,7 @@ X Radar（`https://x.com/i/radar/<id>`）の日本語以外の投稿を、ペー
 - 日本語の投稿は翻訳せずそのまま表示。
 - 翻訳後も原文はホバー（`title` ツールチップ）で確認可能。翻訳済みは左の青いラインで区別。
 - `t.co` URL・@メンション・#ハッシュタグは保護して原形を維持（大文字小文字も保持）。
+- **用語集**で AI 固有名詞（`GPT Image 2` / `Seedance` / `Nano Banana` / `Midjourney` / `ComfyUI` / `LoRA` 等）を翻訳せず原形維持（誤訳 `Seedance→種子` 等を防止）。語は `src/translator.js` の `GLOSSARY` で増減できる。
 - 仮想スクロールで追加読み込みされる投稿も自動翻訳（`MutationObserver`）。
 
 ## 仕組み
@@ -15,7 +16,8 @@ X Radar（`https://x.com/i/radar/<id>`）の日本語以外の投稿を、ペー
 1. URL が `/i/radar/` を含むときだけ起動（X は SPA なので履歴 API のラップ + URL ポーリングで遷移を検知）。
 2. 投稿本文（`div.whitespace-pre-wrap.break-words.text-body`）を走査し、`LanguageDetector` で言語判定。
 3. 日本語・判定不能・低信頼度はスキップ。それ以外は `Translator` で日本語へ翻訳し `textContent` を置換。
-4. Chrome のオンデバイス翻訳は改行混じりの SNS テキストで行やトークンを欠落させるため、**行単位に分割 → 行内を URL/@/# で分割 → 散文セグメントだけ翻訳**し、トークンは元位置に残す。
+4. Chrome のオンデバイス翻訳は改行混じりの SNS テキストで行やトークンを欠落させるため、**行単位に分割 → 行内を URL/@/#/用語集 で分割 → 散文セグメントだけ翻訳**し、トークンは元位置に残す。
+   - 用語集による分割保護は用語を確実に維持する一方、1 文に固有名詞が多いと訳文がやや途切れがちになる（フィードは短いキャプションが多く実害は小）。フルーエンシーを優先したい語は `GLOSSARY` から外す。
 
 > 注: コンテンツスクリプトは `world: "MAIN"` で動作する。組み込み翻訳 API へのアクセスと、X 本体の SPA 遷移（`history.pushState`）の確実な捕捉のため。`chrome.*` API は使用しない。
 

@@ -12,12 +12,38 @@
   // 言語判定の最低信頼度。これ未満はスキップ（タグ・URL のみの投稿など）
   const MIN_CONFIDENCE = 0.5;
 
-  // 翻訳から保護するトークン: URL / @メンション / #ハッシュタグ
+  // 翻訳から保護する固有名詞（AI モデル/ツール/企業名など）。
+  // 誤訳（例: Seedance→シーダンス、GPT Image 2→GPT 画像 2）を防ぐためそのまま温存する。
+  // ここに語を足すだけで保護対象を拡張できる。大文字小文字は区別しない。
+  const GLOSSARY = [
+    "GPT Image 2", "GPT Image", "GPT-4o", "ChatGPT", "DALL·E", "DALL-E",
+    "Stable Diffusion", "Nano Banana Pro", "Nano Banana", "Midjourney",
+    "ComfyUI", "Automatic1111", "ControlNet", "Dream Machine", "Hugging Face",
+    "Stability AI", "LoRA", "Seedance", "Sora 2", "Sora", "Veo 3", "Veo",
+    "Kling", "Pika", "Runway", "Flux", "Imagen", "Firefly", "Ideogram",
+    "Leonardo", "Recraft", "Krea", "Luma", "Hailuo", "Vidu", "Hunyuan",
+    "Wan2", "Qwen", "InvokeAI", "Fooocus", "Replicate", "Civitai", "Freepik",
+    "HeyGen", "Higgsfield", "MiniMax", "Animon", "Suno", "OpenAI", "Anthropic",
+    "Claude", "Gemini", "DeepMind", "ByteDance",
+  ];
+
+  function escapeRegex(value) {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }
+
+  // 長い語を先に並べ（"Nano Banana Pro" を "Nano Banana" より優先）、語境界付きで連結
+  const glossarySource = GLOSSARY.slice()
+    .sort((a, b) => b.length - a.length)
+    .map((term) => "\\b" + escapeRegex(term) + "\\b")
+    .join("|");
+
+  // 翻訳から保護するトークン: URL / @メンション / #ハッシュタグ / 用語集
   // URL は \S+ で貪欲に取り、句読点を含む正規 URL を切らずに丸ごと温存する
   // （末尾句読点の巻き込みより、正規 URL の途中切断を避ける方を優先）。
-  const TOKEN_SOURCE = "https?:\\/\\/\\S+|@\\w+|#[\\p{L}\\p{N}_]+";
-  const TOKEN_TEST = new RegExp(TOKEN_SOURCE, "u");
-  const TOKEN_SPLIT = new RegExp("(" + TOKEN_SOURCE + ")", "gu");
+  const TOKEN_SOURCE =
+    "https?:\\/\\/\\S+|@\\w+|#[\\p{L}\\p{N}_]+|" + glossarySource;
+  const TOKEN_TEST = new RegExp(TOKEN_SOURCE, "iu");
+  const TOKEN_SPLIT = new RegExp("(" + TOKEN_SOURCE + ")", "giu");
   const HAS_LETTER = /[\p{L}]/u;
 
   const ns = (window.__xrT = window.__xrT || {});
