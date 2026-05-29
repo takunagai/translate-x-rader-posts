@@ -26,11 +26,7 @@
     if (element.dataset.xrState) return;
 
     const text = (element.textContent || "").trim();
-    if (text.length < 4) {
-      element.dataset.xrState = "skip";
-      return;
-    }
-
+    // 短すぎ/判定不能は detectLang が null を返す（最低文字数の閾値もそちらに集約）
     const lang = await ns.detectLang(text);
     if (!lang) {
       element.dataset.xrState = "skip";
@@ -49,6 +45,7 @@
         element.dataset.xrOriginal = text;
         element.textContent = result.text;
         ns.markTranslated(element, text);
+        element.dataset.xrState = "translated";
       } else if (result.needsDownload) {
         element.dataset.xrState = "pending";
         element.dataset.xrLang = lang;
@@ -63,9 +60,12 @@
   }
 
   function scan() {
-    document.querySelectorAll(BODY_SELECTOR).forEach((element) => {
-      processBody(element);
-    });
+    // 未処理（data-xr-state 未設定）の本文だけを対象にする
+    document
+      .querySelectorAll(`${BODY_SELECTOR}:not([data-xr-state])`)
+      .forEach((element) => {
+        processBody(element);
+      });
   }
 
   function scheduleScan() {

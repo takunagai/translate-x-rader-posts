@@ -133,7 +133,7 @@
     if (!instance) {
       const availability = availabilityCache.get(src);
       if (availability === "downloadable" || availability === "downloading") {
-        return { needsDownload: true, lang: src };
+        return { needsDownload: true };
       }
       return { skip: true };
     }
@@ -167,7 +167,6 @@
     TARGET_LANG,
     hasApis,
     detectLang,
-    availabilityOf,
     translate,
     ensureDownloaded,
   });

@@ -60,25 +60,20 @@
     refreshButton();
   }
 
-  function getPendingLangs() {
-    return Array.from(pendingLangs);
-  }
-
   function clearPending() {
     pendingLangs.clear();
     refreshButton();
   }
 
+  // 見た目だけ担当（状態 data-xr-state の書き込みは content.js に一元化）
   function markTranslated(element, originalText) {
     element.title = originalText;
     element.classList.add("xr-translated");
-    element.dataset.xrState = "translated";
   }
 
   Object.assign(ns, {
     setActivateHandler,
     addPendingLang,
-    getPendingLangs,
     clearPending,
     markTranslated,
   });
