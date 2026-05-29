@@ -166,26 +166,22 @@
     }
   }
 
-  // SPA 遷移検知: history API のラップ + popstate + URL ポーリング（保険）
-  const originalPushState = history.pushState;
-  const originalReplaceState = history.replaceState;
-  history.pushState = function (...args) {
-    originalPushState.apply(this, args);
-    setTimeout(sync, 0);
-  };
-  history.replaceState = function (...args) {
-    originalReplaceState.apply(this, args);
-    setTimeout(sync, 0);
-  };
-  window.addEventListener("popstate", () => setTimeout(sync, 0));
-
-  let lastHref = location.href;
-  setInterval(() => {
-    if (location.href !== lastHref) {
-      lastHref = location.href;
-      sync();
-    }
-  }, URL_POLL_MS);
+  // SPA 遷移検知: Navigation API（イベント駆動）を優先。
+  // history.pushState の改変やポーリングを行わず、グローバル副作用・検知容易性を避ける。
+  // navigate イベントは pushState/replaceState/戻る進む（traverse）すべてで発火する。
+  if (typeof navigation !== "undefined" && navigation.addEventListener) {
+    navigation.addEventListener("navigate", () => setTimeout(sync, 0));
+  } else {
+    // フォールバック（Navigation API 非対応ブラウザ）: popstate + URL ポーリング
+    window.addEventListener("popstate", () => setTimeout(sync, 0));
+    let lastHref = location.href;
+    setInterval(() => {
+      if (location.href !== lastHref) {
+        lastHref = location.href;
+        sync();
+      }
+    }, URL_POLL_MS);
+  }
 
   sync();
 })();

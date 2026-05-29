@@ -23,7 +23,7 @@ X Radar（`https://x.com/i/radar/<id>`）の日本語以外の投稿を、Chrome
 - 責務分割:
   - `src/translator.js` — 翻訳コア。`LanguageDetector`/`Translator` のプール、availability と translator の **Promise メモ化**、用語集 + URL/@/# の **トークン保護**、構造保持翻訳 `translateRich`。export: `TARGET_LANG, hasApis, detectLang, detectorNeedsDownload, translate, ensureDownloaded`
   - `src/ui.js` — フローティング有効化ボタン + 翻訳済みマーカー（見た目のみ）。export: `setActivateHandler, addPendingLang, setNeedsDetector, clearPending, markTranslated`
-  - `src/content.js` — 制御ループ。SPA 遷移検知（`history.pushState/replaceState` ラップ + `popstate` + 500ms URL ポーリング）で `/i/radar/` 滞在時のみ稼働。`MutationObserver(document.body)` → デバウンス `scan` → **同時実行上限付きプール** → `processBody`。`ns.__contentLoaded` で二重注入をガード。
+  - `src/content.js` — 制御ループ。SPA 遷移検知は **Navigation API の `navigate` イベント**（非対応ブラウザは `popstate` + URL ポーリングにフォールバック）で `/i/radar/` 滞在時のみ稼働。`history` のグローバル改変・常時ポーリングは行わない。`MutationObserver(document.body)` → デバウンス `scan` → **同時実行上限付きプール** → `processBody`。`ns.__contentLoaded` で二重注入をガード。
 - **投稿の状態機械**: 各本文 `div`（`div.whitespace-pre-wrap.break-words.text-body`）の `data-xr-state` ∈ `working / translated / ja / skip / pending / error`、再試行は `data-xr-retry`。`scan` は `:not([data-xr-state])` で未処理のみ対象。原文は `title` 属性に保持（ホバー表示・復元用）。状態の書き込みは `content.js` に一元化（`ui.js` は class/title のみ）。
 
 ## このコードベース特有の制約（変更前に必読）
