@@ -1,0 +1,42 @@
+# === macOS ===
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+
+# === エディタ / IDE ===
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# === Chrome 拡張のパッケージ / 署名 ===
+# 配布用 zip・CRX・秘密鍵は絶対にコミットしない
+*.zip
+*.crx
+*.pem
+dist/
+build/
+web-ext-artifacts/
+
+# === Node（将来ビルドを足す場合に備えて） ===
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.pnpm-store/
+
+# === 環境変数 / シークレット ===
+.env
+.env.*
+!.env.example
+
+# === ツール出力 ===
+.firecrawl/
+*.log
+
+# === その他 ===
+*.tmp
+.cache/
